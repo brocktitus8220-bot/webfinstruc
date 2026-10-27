@@ -1,0 +1,21 @@
+{
+  "name": "@repo/design-tokens",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./tailwind-preset": "./src/tailwind-preset.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "tailwindcss": "^3.4.0"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.19",
+    "typescript": "5.9.3"
+  }
+}
