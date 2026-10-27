@@ -11,7 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useApi, useApiMutation } from "@/lib/api";
+import { API_MODE, useApi, useApiMutation } from "@/lib/api";
 import { money } from "@/lib/format";
 import type { SettingsSlug } from "@/lib/nav";
 import { useAccounts, useAllocationRules, useMe, useTaxSettings, useTransactions } from "@/lib/queries";
@@ -209,16 +209,18 @@ function Data() {
     <Section title="Your data" description="Export everything, or reset the sample data in this browser.">
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" onClick={exportJson} disabled={busy}>{busy ? "Preparing" : "Export as JSON"}</Button>
-        <Button
-          variant="destructive"
-          onClick={() => {
-            if (!window.confirm("Reset sample data and onboarding answers in this browser?")) return;
-            resetMockStorage(window.localStorage, STORAGE_KEYS.mockApi);
-            window.location.assign("/onboarding/1");
-          }}
-        >
-          Reset sample data
-        </Button>
+        {API_MODE === "mock" && (
+          <Button
+            variant="destructive"
+            onClick={() => {
+              if (!window.confirm("Reset sample data and onboarding answers in this browser?")) return;
+              resetMockStorage(window.localStorage, STORAGE_KEYS.mockApi);
+              window.location.assign("/onboarding/1");
+            }}
+          >
+            Reset sample data
+          </Button>
+        )}
       </div>
     </Section>
   );

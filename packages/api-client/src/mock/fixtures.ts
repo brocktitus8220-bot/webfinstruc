@@ -1,4 +1,4 @@
-import type { Account, Holding, Transaction, TransactionSource, User, Workspace, WorkspaceKind } from "@repo/core";
+import type { Account, Holding, Invoice, Transaction, TransactionSource, User, Workspace, WorkspaceKind } from "@repo/core";
 import { addDays, daysInMonth, monthStart, startOfUtcDay, toIsoDate } from "./dates";
 
 /** Small seeded PRNG so sample data is stable between reloads. */
@@ -78,6 +78,19 @@ export const MOCK_HOLDINGS: Holding[] = [
   holding("h_ct_tbill", "acc_custodial_taxable", "TBILL", "3-Month Treasury Bill Ladder", "fixed_income", 250, 9_874, 9_801),
   holding("h_ct_muni", "acc_custodial_taxable", "MUB", "National Municipal Bond ETF", "fixed_income", 110, 10_688, 10_920),
   holding("h_ct_cash", "acc_custodial_taxable", "CASH", "Money market", "cash", 6_200, 100, 100),
+];
+
+export const MOCK_TAX_PROFILE = {
+  estimatedEffectiveRatePercent: 28,
+  priorYearTotalTaxCents: 3_120_000,
+  priorYearAgiCents: 11_850_000,
+  safeHarborMethod: "prior_year_110",
+} as const;
+
+export const MOCK_INVOICES: Invoice[] = [
+  { id: "inv_1001", workspaceId: "ws_business", number: "INV-1001", client: "Northwind Studio", issueDate: "2026-09-02", dueDate: "2026-10-02", amountCents: 480_000, status: "paid", paidDate: "2026-09-28" },
+  { id: "inv_1002", workspaceId: "ws_business", number: "INV-1002", client: "Juniper Labs", issueDate: "2026-09-20", dueDate: "2026-10-20", amountCents: 315_000, status: "overdue", paidDate: null },
+  { id: "inv_1003", workspaceId: "ws_business", number: "INV-1003", client: "Atlas & Co.", issueDate: "2026-10-10", dueDate: "2026-11-09", amountCents: 620_000, status: "sent", paidDate: null },
 ];
 
 /** Business gross income per month, oldest first. One slow month on purpose. */

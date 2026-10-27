@@ -2,7 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  transpilePackages: ["@repo/core", "@repo/api-client", "@repo/design-tokens"],
+  transpilePackages: ["@repo/core", "@repo/api-client", "@repo/api-server", "@repo/db", "@repo/design-tokens"],
+  // Keep the Postgres driver as a plain Node require on the server.
+  serverExternalPackages: ["postgres"],
   async redirects() {
     return [
       { source: "/app", destination: "/app/overview", permanent: false },

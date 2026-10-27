@@ -6,6 +6,12 @@ import { createMockTransport } from "@repo/api-client/mock";
 import { STORAGE_KEYS } from "./storage";
 import { useWorkspace } from "./workspace-context";
 
+/**
+ * "mock" (default): sample data in the browser, no backend needed.
+ * "http": the real API. Defaults to this app's own routes at /api/v1.
+ */
+export const API_MODE: "mock" | "http" = process.env.NEXT_PUBLIC_API_MODE === "http" ? "http" : "mock";
+
 let sharedTransport: Transport | null = null;
 
 /**
@@ -19,8 +25,8 @@ function getTransport(): Transport {
 }
 
 function createTransport(): Transport {
-  if (process.env.NEXT_PUBLIC_API_MODE === "http") {
-    return createFetchTransport(process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000");
+  if (API_MODE === "http") {
+    return createFetchTransport(process.env.NEXT_PUBLIC_API_BASE_URL || "/api/v1");
   }
   return createMockTransport({
     storage: typeof window === "undefined" ? undefined : window.localStorage,

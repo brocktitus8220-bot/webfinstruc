@@ -35,6 +35,9 @@ const define = <const E extends EndpointDef>(e: E) => e;
 /** A list of ids that also accepts a single value (as a repeated query param would). */
 const IdList = z.preprocess((v) => (typeof v === "string" ? [v] : v), z.array(Id));
 
+/** A boolean that survives a query string: "false" must parse as false. */
+const QueryBoolean = z.preprocess((v) => (v === "true" ? true : v === "false" ? false : v), z.boolean());
+
 /**
  * The API contract. Every request and response shape comes from the Zod
  * schemas in @repo/core; the client and the mock server are derived from it.
@@ -94,7 +97,7 @@ export const contract = {
   listHoldings: define({
     method: "GET",
     path: "/holdings",
-    query: z.object({ custodial: z.coerce.boolean().optional() }),
+    query: z.object({ custodial: QueryBoolean.optional() }),
     response: z.array(Holding),
   }),
   getHolding: define({

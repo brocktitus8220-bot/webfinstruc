@@ -13,7 +13,7 @@ import type { EndpointName } from "../contract";
 import { ApiError } from "../errors";
 import type { ApiRequest, EndpointResponse, ParsedRequest, Transport } from "../types";
 import { addDays, monthStart, startOfUtcDay, toIsoDate, toIsoMonth } from "./dates";
-import { buildMockTransactions, MOCK_ACCOUNTS, MOCK_HOLDINGS, MOCK_USER, MOCK_WORKSPACES } from "./fixtures";
+import { buildMockTransactions, MOCK_ACCOUNTS, MOCK_HOLDINGS, MOCK_INVOICES, MOCK_TAX_PROFILE, MOCK_USER, MOCK_WORKSPACES } from "./fixtures";
 
 /** Matches the subset of the Web Storage API the mock needs. */
 export interface MockStorage {
@@ -43,11 +43,7 @@ const initialState = (): MutableState => ({
   onboarding: { completedAt: null },
   allocationRules: DEFAULT_ALLOCATION_RULES,
   createdTransactions: [],
-  invoices: [
-    { id: "inv_1001", workspaceId: "ws_business", number: "INV-1001", client: "Northwind Studio", issueDate: "2026-09-02", dueDate: "2026-10-02", amountCents: 480_000, status: "paid", paidDate: "2026-09-28" },
-    { id: "inv_1002", workspaceId: "ws_business", number: "INV-1002", client: "Juniper Labs", issueDate: "2026-09-20", dueDate: "2026-10-20", amountCents: 315_000, status: "overdue", paidDate: null },
-    { id: "inv_1003", workspaceId: "ws_business", number: "INV-1003", client: "Atlas & Co.", issueDate: "2026-10-10", dueDate: "2026-11-09", amountCents: 620_000, status: "sent", paidDate: null },
-  ],
+  invoices: MOCK_INVOICES.map((i) => ({ ...i })),
 });
 
 type Handlers = {
@@ -219,10 +215,7 @@ export function createMockTransport(options: MockTransportOptions = {}): Transpo
       taxYear: now().getUTCFullYear(),
       filingStatus: state.onboarding.filingStatus ?? "single",
       state: state.onboarding.state ?? "CA",
-      estimatedEffectiveRatePercent: 28,
-      priorYearTotalTaxCents: 3_120_000,
-      priorYearAgiCents: 11_850_000,
-      safeHarborMethod: "prior_year_110",
+      ...MOCK_TAX_PROFILE,
     }),
   };
 
