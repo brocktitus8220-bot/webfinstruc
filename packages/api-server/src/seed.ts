@@ -3,6 +3,7 @@ import { toBasisPoints } from "@repo/core";
 import {
   buildMockTransactions,
   MOCK_ACCOUNTS,
+  MOCK_CARD_PROFILES,
   MOCK_HOLDINGS,
   MOCK_INVOICES,
   MOCK_TAX_PROFILE,
@@ -50,12 +51,20 @@ export async function seedSampleData(db: Database, userId: string, now = new Dat
         name: a.name,
         institution: a.institution,
         type: a.type,
+        connection: a.connection,
         mask: a.mask,
         balanceCents: a.balanceCents,
         currency: a.currency,
         custodian: a.custodian,
       })),
     );
+
+    const cards = Object.entries(MOCK_CARD_PROFILES);
+    if (cards.length > 0) {
+      await tx.insert(schema.creditCardProfiles).values(cards.map(([id, { rates: _rates, ...p }]) => ({ accountId: accountId(id), ...p })));
+      const rates = cards.flatMap(([id, p]) => p.rates.map((r) => ({ accountId: accountId(id), ...r })));
+      if (rates.length > 0) await tx.insert(schema.creditCardRewardRates).values(rates);
+    }
 
     await tx.insert(schema.holdings).values(
       MOCK_HOLDINGS.map((h) => ({ ...h, id: newId("hold"), accountId: accountId(h.accountId) })),

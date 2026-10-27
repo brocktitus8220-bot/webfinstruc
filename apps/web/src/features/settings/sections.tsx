@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { FILING_STATUS_LABELS } from "@repo/core";
 import { resetMockStorage } from "@repo/api-client/mock";
@@ -17,6 +18,9 @@ import type { SettingsSlug } from "@/lib/nav";
 import { useAccounts, useAllocationRules, useMe, useTaxSettings, useTransactions } from "@/lib/queries";
 import { STORAGE_KEYS } from "@/lib/storage";
 import { AllocationEditor } from "../allocation/allocation-editor";
+import { ConnectBankButton } from "../connections/connect-bank-button";
+import { ConnectionsList } from "../connections/connections-list";
+import { plaidDisabledReason, usePlaidStatus } from "../connections/use-plaid-connect";
 
 function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
@@ -59,13 +63,20 @@ function Profile() {
   );
 }
 
+const CONNECTION_LABEL = { plaid: "Plaid", csv: "Statement import", sample: "Sample", manual: "Manual" } as const;
+
 function Accounts() {
   const accounts = useAccounts();
+  const status = usePlaidStatus();
+  const reason = status.isLoading ? null : plaidDisabledReason(status.data?.enabled);
   return (
-    <Section title="Connected accounts" description="Bank and brokerage connections. Sample data for now.">
-      <div className="mb-3 flex justify-end">
-        <Button disabled title="Bank connections arrive in a later step">Connect an account</Button>
+    <Section title="Connected accounts" description="Bank and credit card connections through Plaid, plus imported and sample accounts.">
+      <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+        {reason && <span className="mr-auto text-xs text-muted-foreground">{reason}</span>}
+        <Button asChild variant="outline"><Link href="/app/credit-cards?tab=cards#import">Import Apple Card statement</Link></Button>
+        <ConnectBankButton label="Connect an account" />
       </div>
+      <ConnectionsList />
       {!accounts.data ? <Skeleton className="h-40" /> : (
         <ul className="divide-y rounded-md border">
           {accounts.data.map((a) => (
@@ -75,6 +86,7 @@ function Accounts() {
                 <span className="block text-xs text-muted-foreground">{a.custodian ?? a.institution}</span>
               </span>
               <Badge className="capitalize">{a.workspaceKind}</Badge>
+              <Badge variant="outline">{CONNECTION_LABEL[a.connection]}</Badge>
               <Badge variant="outline" className="capitalize">{a.type}</Badge>
               <span className="w-28 text-right tabular">{money(a.balanceCents)}</span>
             </li>

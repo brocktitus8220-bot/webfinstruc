@@ -1,4 +1,5 @@
-import type { Account, Holding, Invoice, Transaction, TransactionSource, User, Workspace, WorkspaceKind } from "@repo/core";
+import type { Account, CreditCardProfile, Holding, Invoice, Transaction, TransactionSource, User, Workspace, WorkspaceKind } from "@repo/core";
+import { findCreditCardPreset } from "@repo/core";
 import { addDays, daysInMonth, monthStart, startOfUtcDay, toIsoDate } from "./dates";
 
 /** Small seeded PRNG so sample data is stable between reloads. */
@@ -31,29 +32,54 @@ const wsId = (kind: WorkspaceKind) => (kind === "business" ? "ws_business" : "ws
 export const MOCK_ACCOUNTS: Account[] = [
   {
     id: "acc_biz_checking", workspaceId: "ws_business", workspaceKind: "business", name: "Business Checking",
-    institution: "Harbor Point Bank", type: "checking", mask: "4821", balanceCents: 4_862_415, currency: "USD", custodian: null,
+    institution: "Harbor Point Bank", type: "checking", connection: "sample", mask: "4821", balanceCents: 4_862_415, currency: "USD", custodian: null,
   },
   {
     id: "acc_tax_reserve", workspaceId: "ws_business", workspaceKind: "business", name: "Tax Reserve",
-    institution: "Harbor Point Bank", type: "savings", mask: "9034", balanceCents: 2_140_000, currency: "USD", custodian: null,
+    institution: "Harbor Point Bank", type: "savings", connection: "sample", mask: "9034", balanceCents: 2_140_000, currency: "USD", custodian: null,
   },
   {
     id: "acc_personal_checking", workspaceId: "ws_personal", workspaceKind: "personal", name: "Personal Checking",
-    institution: "Northline Credit Union", type: "checking", mask: "1177", balanceCents: 1_186_240, currency: "USD", custodian: null,
+    institution: "Northline Credit Union", type: "checking", connection: "sample", mask: "1177", balanceCents: 1_186_240, currency: "USD", custodian: null,
   },
   {
     id: "acc_brokerage", workspaceId: "ws_personal", workspaceKind: "personal", name: "Individual Brokerage",
-    institution: "Self-directed broker", type: "brokerage", mask: "5502", balanceCents: 0, currency: "USD", custodian: null,
+    institution: "Self-directed broker", type: "brokerage", connection: "sample", mask: "5502", balanceCents: 0, currency: "USD", custodian: null,
   },
   {
     id: "acc_sep_ira", workspaceId: "ws_personal", workspaceKind: "personal", name: "SEP IRA",
-    institution: "Advisor managed", type: "retirement", mask: "7310", balanceCents: 0, currency: "USD", custodian: "Meridian Trust Co.",
+    institution: "Advisor managed", type: "retirement", connection: "sample", mask: "7310", balanceCents: 0, currency: "USD", custodian: "Meridian Trust Co.",
   },
   {
     id: "acc_custodial_taxable", workspaceId: "ws_business", workspaceKind: "business", name: "Business Reserve Portfolio",
-    institution: "Advisor managed", type: "brokerage", mask: "2268", balanceCents: 0, currency: "USD", custodian: "Meridian Trust Co.",
+    institution: "Advisor managed", type: "brokerage", connection: "sample", mask: "2268", balanceCents: 0, currency: "USD", custodian: "Meridian Trust Co.",
+  },
+  {
+    id: "acc_biz_card", workspaceId: "ws_business", workspaceKind: "business", name: "Business Card",
+    institution: "Harbor Point Bank", type: "credit", connection: "sample", mask: "6604", balanceCents: -238_940, currency: "USD", custodian: null,
+  },
+  {
+    id: "acc_apple_card", workspaceId: "ws_personal", workspaceKind: "personal", name: "Apple Card",
+    institution: "Apple", type: "credit", connection: "csv", mask: "0912", balanceCents: -142_318, currency: "USD", custodian: null,
+  },
+  {
+    id: "acc_travel_card", workspaceId: "ws_personal", workspaceKind: "personal", name: "Travel Rewards Card",
+    institution: "Northline Credit Union", type: "credit", connection: "sample", mask: "3388", balanceCents: -612_540, currency: "USD", custodian: null,
   },
 ];
+
+const fromPreset = (id: string, extra: Pick<CreditCardProfile, "creditLimitCents" | "aprBasisPoints" | "statementDay" | "dueDay">): CreditCardProfile => {
+  const preset = findCreditCardPreset(id);
+  if (!preset) throw new Error(`Unknown card preset ${id}`);
+  return { ...preset.profile, rates: preset.profile.rates.map((r) => ({ ...r })), preset: id, ...extra };
+};
+
+/** Rewards profiles for the sample cards, keyed by fixture account id. */
+export const MOCK_CARD_PROFILES: Record<string, CreditCardProfile> = {
+  acc_biz_card: fromPreset("business_1_5", { creditLimitCents: 2_500_000, aprBasisPoints: 2_249, statementDay: 3, dueDay: 28 }),
+  acc_apple_card: fromPreset("apple_card", { creditLimitCents: 800_000, aprBasisPoints: 2_624, statementDay: 31, dueDay: 31 }),
+  acc_travel_card: fromPreset("travel_3x", { creditLimitCents: 1_500_000, aprBasisPoints: 2_399, statementDay: 18, dueDay: 13 }),
+};
 
 const holding = (
   id: string, accountId: string, symbol: string, name: string, assetClass: Holding["assetClass"],
@@ -122,10 +148,7 @@ export function buildMockTransactions(now: Date): Transaction[] {
   const out: Transaction[] = [];
   let seq = 0;
 
-  const push = (
-    kind: Transaction["kind"], ws: WorkspaceKind, accountId: string, date: Date, amountCents: number,
-    description: string, category: string, counterparty: string | null, source: TransactionSource = "plaid",
-  ) => {
+  const push: Push = (kind, ws, accountId, date, amountCents, description, category, counterparty, source = "plaid") => {
     if (date > today) return;
     seq += 1;
     out.push({
@@ -176,5 +199,63 @@ export function buildMockTransactions(now: Date): Transaction[] {
     }
   }
 
+  addCardTransactions(today, push);
+
   return out.sort((a, b) => (a.date === b.date ? a.id.localeCompare(b.id) : b.date.localeCompare(a.date)));
+}
+
+type Push = (
+  kind: Transaction["kind"], ws: WorkspaceKind, accountId: string, date: Date, amountCents: number,
+  description: string, category: string, counterparty: string | null, source?: TransactionSource,
+) => void;
+
+/**
+ * Credit card spending, on its own random stream so the cash account data
+ * above stays exactly as it was. Some spending is on the "wrong" card on
+ * purpose, so the optimizer has something to suggest.
+ */
+const CARD_SPEND: [WorkspaceKind, string, string, string, number, number, number][] = [
+  // workspace, account, description, category, times per month, min cents, max cents
+  ["business", "acc_biz_card", "API usage", "Software", 1, 2_000, 8_000],
+  ["business", "acc_biz_card", "Client dinner", "Dining", 2, 6_000, 18_000],
+  ["business", "acc_biz_card", "Office supplies", "Shopping", 1, 4_000, 15_000],
+  ["personal", "acc_apple_card", "Corner bistro", "Dining", 3, 2_500, 9_500],
+  ["personal", "acc_apple_card", "Rideshare", "Transit", 2, 1_400, 4_200],
+  ["personal", "acc_apple_card", "Video streaming", "Streaming", 1, 1_799, 1_799],
+  ["personal", "acc_apple_card", "Online order", "Shopping", 2, 2_000, 12_000],
+  ["personal", "acc_travel_card", "Neighborhood market", "Groceries", 3, 4_500, 13_000],
+  ["personal", "acc_travel_card", "Gas station", "Gas", 2, 3_800, 6_200],
+  ["personal", "acc_travel_card", "Coffee", "Dining", 4, 450, 900],
+];
+
+function addCardTransactions(today: Date, push: Push) {
+  const rand = mulberry32(7_331);
+  const between = (min: number, max: number) => min + Math.floor(rand() * (max - min + 1));
+  for (let offset = -12; offset <= 0; offset++) {
+    const start = monthStart(today, offset);
+    const days = daysInMonth(start);
+    const day = (n: number) => addDays(start, Math.min(n, days) - 1);
+    const spent = new Map<string, number>();
+    for (const [ws, accountId, desc, cat, times, min, max] of CARD_SPEND) {
+      for (let i = 0; i < times; i++) {
+        const amount = between(min, max);
+        push("expense", ws, accountId, day(between(1, 28)), -amount, desc, cat, null, accountId === "acc_apple_card" ? "csv" : "plaid");
+        spent.set(accountId, (spent.get(accountId) ?? 0) + amount);
+      }
+    }
+    // A trip every quarter on the business card.
+    if (offset % 3 === 0) {
+      const amount = between(28_000, 65_000);
+      push("expense", "business", "acc_biz_card", day(between(5, 20)), -amount, "Flight to client site", "Travel", null);
+      spent.set("acc_biz_card", (spent.get("acc_biz_card") ?? 0) + amount);
+    }
+    // Each month's card spending is paid from checking on the 25th.
+    for (const [accountId, amount] of spent) {
+      const ws: WorkspaceKind = accountId === "acc_biz_card" ? "business" : "personal";
+      const checking = ws === "business" ? "acc_biz_checking" : "acc_personal_checking";
+      const name = MOCK_ACCOUNTS.find((a) => a.id === accountId)!.name;
+      push("transfer", ws, checking, day(25), -amount, `${name} payment`, "Card payment", name);
+      push("transfer", ws, accountId, day(25), amount, "Payment received", "Card payment", null, accountId === "acc_apple_card" ? "csv" : "plaid");
+    }
+  }
 }

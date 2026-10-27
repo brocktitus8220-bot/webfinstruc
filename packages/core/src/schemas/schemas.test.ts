@@ -11,7 +11,8 @@ describe("schemas", () => {
     expect(Transaction.safeParse({ ...base, source: "plaid" }).success).toBe(true);
     expect(Transaction.safeParse({ ...base, source: "manual" }).success).toBe(true);
     expect(Transaction.safeParse({ ...base, source: "other" }).success).toBe(true);
-    expect(Transaction.safeParse({ ...base, source: "csv" }).success).toBe(false);
+    expect(Transaction.safeParse({ ...base, source: "csv" }).success).toBe(true);
+    expect(Transaction.safeParse({ ...base, source: "bank" }).success).toBe(false);
     expect(Transaction.safeParse(base).success).toBe(false);
   });
 

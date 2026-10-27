@@ -4,7 +4,12 @@ import {
   AccountType,
   ALLOCATION_BUCKETS,
   type AllocationRules,
+  type BankConnection,
+  type CreditCard,
+  type CreditCardProfile,
   DEFAULT_ALLOCATION_RULES,
+  DEFAULT_CREDIT_CARD_PROFILE,
+  findCreditCardPreset,
   type Holding,
   type Invoice,
   isCashAccount,
@@ -19,6 +24,7 @@ import type { EndpointName, EndpointResponse, ParsedRequest } from "@repo/api-cl
 import { type Database, schema } from "@repo/db";
 import { HttpError } from "./errors";
 import { newId } from "./ids";
+import { decryptToken, encryptToken, PlaidApiError, type PlaidService, syncPlaidItem } from "./plaid";
 import { getWorkspaceId } from "./provision";
 import { seedSampleData } from "./seed";
 
@@ -27,13 +33,18 @@ export interface HandlerContext {
   userId: string;
   workspace: WorkspaceScope;
   now: Date;
+  /** Null when Plaid keys are not configured. */
+  plaid: PlaidService | null;
 }
 
 export type Handlers = {
   [N in EndpointName]: (req: ParsedRequest<N>, ctx: HandlerContext) => Promise<EndpointResponse<N>>;
 };
 
-const { accounts, allocationRules, holdings, invoices, onboarding, taxSettings, transactions, users, workspaces } = schema;
+const {
+  accounts, allocationRules, creditCardProfiles, creditCardRewardRates, holdings, invoices, onboarding, plaidItems, taxSettings,
+  transactions, users, workspaces,
+} = schema;
 
 /** Account types whose balance is the sum of their holdings. */
 const INVESTMENT_TYPES = new Set<Account["type"]>(["brokerage", "retirement"]);
@@ -91,6 +102,7 @@ async function scopedAccounts(ctx: HandlerContext): Promise<Account[]> {
     name: a.name,
     institution: a.institution,
     type: a.type,
+    connection: a.connection,
     mask: a.mask,
     balanceCents: INVESTMENT_TYPES.has(a.type) ? (holdingValue.get(a.id) ?? 0) : a.balanceCents,
     currency: a.currency,
@@ -163,6 +175,99 @@ async function readOnboarding(db: Database, userId: string): Promise<OnboardingS
 const notFound = (what: string): never => {
   throw new HttpError(404, `${what} not found`);
 };
+
+/** Card profiles and bonus rates for these accounts. Missing profiles fall back to the default. */
+async function readCardProfiles(db: Database, accountIds: string[]): Promise<Map<string, CreditCardProfile>> {
+  const out = new Map<string, CreditCardProfile>();
+  if (accountIds.length === 0) return out;
+  const profiles = await db.select().from(creditCardProfiles).where(inArray(creditCardProfiles.accountId, accountIds));
+  const rates = await db.select().from(creditCardRewardRates).where(inArray(creditCardRewardRates.accountId, accountIds));
+  for (const { accountId, ...p } of profiles) {
+    out.set(accountId, {
+      ...p,
+      rates: rates
+        .filter((r) => r.accountId === accountId)
+        .map((r) => ({ category: r.category, rateBasisPoints: r.rateBasisPoints, annualCapCents: r.annualCapCents })),
+    });
+  }
+  return out;
+}
+
+async function writeCardProfile(db: Database, accountId: string, profile: CreditCardProfile) {
+  const { rates, ...row } = profile;
+  await db.transaction(async (tx) => {
+    await tx.insert(creditCardProfiles).values({ accountId, ...row }).onConflictDoUpdate({ target: creditCardProfiles.accountId, set: row });
+    await tx.delete(creditCardRewardRates).where(eq(creditCardRewardRates.accountId, accountId));
+    if (rates.length > 0) await tx.insert(creditCardRewardRates).values(rates.map((r) => ({ accountId, ...r })));
+  });
+}
+
+const toCreditCard = (a: Account, profile: CreditCardProfile | undefined): CreditCard => ({
+  accountId: a.id,
+  workspaceId: a.workspaceId,
+  workspaceKind: a.workspaceKind,
+  name: a.name,
+  institution: a.institution,
+  mask: a.mask,
+  connection: a.connection,
+  balanceCents: a.balanceCents,
+  profile: profile ?? DEFAULT_CREDIT_CARD_PROFILE,
+});
+
+/** One of this user's accounts, whatever workspace is selected. */
+async function ownedAccount(db: Database, userId: string, accountId: string) {
+  const [row] = await db
+    .select({ account: accounts, kind: workspaces.kind })
+    .from(accounts)
+    .innerJoin(workspaces, eq(accounts.workspaceId, workspaces.id))
+    .where(and(eq(accounts.id, accountId), eq(workspaces.userId, userId)));
+  return row ?? null;
+}
+
+const requirePlaid = (ctx: HandlerContext): PlaidService => {
+  if (!ctx.plaid) throw new HttpError(503, "Bank connections are not set up on this server. Add PLAID_CLIENT_ID, PLAID_SECRET, and PLAID_TOKEN_KEY.");
+  return ctx.plaid;
+};
+
+/** Plaid errors become 502s with Plaid's message, so the UI can show what went wrong. */
+async function withPlaidErrors<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error instanceof PlaidApiError) throw new HttpError(502, error.message, { plaidErrorCode: error.errorCode });
+    throw error;
+  }
+}
+
+async function ownedItem(ctx: HandlerContext, id: string) {
+  const [item] = await ctx.db.select().from(plaidItems).where(and(eq(plaidItems.id, id), eq(plaidItems.userId, ctx.userId)));
+  return item ?? notFound("Connection");
+}
+
+async function listUserConnections(ctx: HandlerContext, onlyId?: string): Promise<BankConnection[]> {
+  const ws = await scopedWorkspaces(ctx);
+  const filters: SQL[] = [eq(plaidItems.userId, ctx.userId)];
+  if (onlyId) filters.push(eq(plaidItems.id, onlyId));
+  else if (ws.ids.length === 0) return [];
+  else filters.push(inArray(plaidItems.workspaceId, ws.ids));
+  const items = await ctx.db.select().from(plaidItems).where(and(...filters)).orderBy(asc(plaidItems.createdAt));
+  if (items.length === 0) return [];
+  const linked = await ctx.db
+    .select({ id: accounts.id, itemId: accounts.plaidItemId })
+    .from(accounts)
+    .where(inArray(accounts.plaidItemId, items.map((i) => i.id)));
+  const all = await ctx.db.select({ id: workspaces.id, kind: workspaces.kind }).from(workspaces).where(eq(workspaces.userId, ctx.userId));
+  const kindOf = new Map(all.map((w) => [w.id, w.kind]));
+  return items.map((i) => ({
+    id: i.id,
+    workspaceKind: kindOf.get(i.workspaceId)!,
+    institutionName: i.institutionName,
+    status: i.status,
+    errorCode: i.errorCode,
+    lastSyncedAt: i.lastSyncedAt ? i.lastSyncedAt.toISOString() : null,
+    accountIds: linked.filter((a) => a.itemId === i.id).map((a) => a.id),
+  }));
+}
 
 /** Real handlers for every endpoint in the contract, backed by Postgres. */
 export const handlers: Handlers = {
@@ -400,5 +505,144 @@ export const handlers: Handlers = {
       priorYearAgiCents: row?.priorYearAgiCents ?? 0,
       safeHarborMethod: row?.safeHarborMethod ?? "prior_year_100",
     };
+  },
+
+  async listCreditCards(_req, ctx) {
+    const cards = (await scopedAccounts(ctx)).filter((a) => a.type === "credit");
+    const profiles = await readCardProfiles(ctx.db, cards.map((c) => c.id));
+    return cards.map((c) => toCreditCard(c, profiles.get(c.id)));
+  },
+
+  async saveCreditCard({ params, body }, ctx) {
+    const owned = await ownedAccount(ctx.db, ctx.userId, params.accountId);
+    if (!owned || owned.account.type !== "credit") return notFound("Credit card");
+    const { owedCents, ...profile } = body;
+    await writeCardProfile(ctx.db, owned.account.id, profile);
+    let balanceCents = owned.account.balanceCents;
+    // Plaid cards get their balance from the bank. Others can be corrected by hand.
+    if (owedCents !== undefined && owned.account.connection !== "plaid") {
+      balanceCents = -owedCents;
+      await ctx.db.update(accounts).set({ balanceCents }).where(eq(accounts.id, owned.account.id));
+    }
+    const { account, kind } = owned;
+    return toCreditCard(
+      { ...account, workspaceKind: kind, balanceCents },
+      (await readCardProfiles(ctx.db, [account.id])).get(account.id),
+    );
+  },
+
+  async importStatement({ body }, ctx) {
+    let accountId: string;
+    let workspaceId: string;
+    if (body.newAccount) {
+      workspaceId = await getWorkspaceId(ctx.db, ctx.userId, body.newAccount.workspaceKind);
+      accountId = newId("acc");
+      await ctx.db.insert(accounts).values({
+        id: accountId,
+        workspaceId,
+        name: body.newAccount.name,
+        institution: body.format === "apple_card" ? "Apple" : "Imported",
+        type: "credit",
+        connection: "csv",
+        mask: body.newAccount.mask,
+        balanceCents: 0,
+      });
+      const preset = body.format === "apple_card" ? findCreditCardPreset("apple_card") : undefined;
+      await writeCardProfile(ctx.db, accountId, {
+        ...DEFAULT_CREDIT_CARD_PROFILE,
+        ...(preset ? { ...preset.profile, preset: preset.id } : {}),
+      });
+    } else {
+      const owned = await ownedAccount(ctx.db, ctx.userId, body.accountId!);
+      if (!owned || owned.account.type !== "credit") return notFound("Credit card");
+      accountId = owned.account.id;
+      workspaceId = owned.account.workspaceId;
+    }
+
+    const inserted = await ctx.db.transaction(async (tx) => {
+      let count = 0;
+      let delta = 0;
+      for (let i = 0; i < body.rows.length; i += 200) {
+        const chunk = body.rows.slice(i, i + 200);
+        const rows = await tx
+          .insert(transactions)
+          .values(chunk.map((r) => ({ id: newId("tx"), workspaceId, accountId, ...r, source: "csv" as const, pending: false, notes: null })))
+          .onConflictDoNothing({ target: [transactions.accountId, transactions.externalId] })
+          .returning({ amountCents: transactions.amountCents });
+        count += rows.length;
+        delta += rows.reduce((s, r) => s + r.amountCents, 0);
+      }
+      if (delta !== 0) {
+        await tx.update(accounts).set({ balanceCents: sql`${accounts.balanceCents} + ${delta}` }).where(eq(accounts.id, accountId));
+      }
+      return count;
+    });
+    return { accountId, inserted, skipped: body.rows.length - inserted };
+  },
+
+  async getPlaidStatus(_req, ctx) {
+    return { enabled: ctx.plaid !== null, environment: ctx.plaid?.env ?? null };
+  },
+
+  async createPlaidLinkToken({ body }, ctx) {
+    const plaid = requirePlaid(ctx);
+    let accessToken: string | undefined;
+    if (body.connectionId) {
+      const item = await ownedItem(ctx, body.connectionId);
+      accessToken = decryptToken(item.accessTokenEncrypted, plaid.tokenKey);
+    }
+    const res = await withPlaidErrors(() =>
+      plaid.api.linkTokenCreate({ userId: ctx.userId, accessToken, webhookUrl: plaid.webhookUrl, redirectUri: plaid.redirectUri }),
+    );
+    return { linkToken: res.link_token, expiration: res.expiration };
+  },
+
+  async exchangePlaidPublicToken({ body }, ctx) {
+    const plaid = requirePlaid(ctx);
+    const exchanged = await withPlaidErrors(() => plaid.api.itemPublicTokenExchange(body.publicToken));
+    const workspaceId = await getWorkspaceId(ctx.db, ctx.userId, body.workspaceKind);
+    const [item] = await ctx.db
+      .insert(plaidItems)
+      .values({
+        id: newId("conn"),
+        userId: ctx.userId,
+        workspaceId,
+        plaidItemId: exchanged.item_id,
+        accessTokenEncrypted: encryptToken(exchanged.access_token, plaid.tokenKey),
+        institutionName: body.institutionName?.trim() || "Bank",
+      })
+      .returning();
+    try {
+      await syncPlaidItem(ctx.db, plaid, item!, ctx.now);
+    } catch (error) {
+      // Transactions may not be ready yet. The SYNC_UPDATES_AVAILABLE webhook or a manual sync picks them up.
+      if (!(error instanceof PlaidApiError)) throw error;
+    }
+    return (await listUserConnections(ctx, item!.id))[0]!;
+  },
+
+  listConnections: (_req, ctx) => listUserConnections(ctx),
+
+  async syncConnection({ params }, ctx) {
+    const plaid = requirePlaid(ctx);
+    const item = await ownedItem(ctx, params.id);
+    return withPlaidErrors(() => syncPlaidItem(ctx.db, plaid, item, ctx.now));
+  },
+
+  async removeConnection({ params }, ctx) {
+    const plaid = requirePlaid(ctx);
+    const item = await ownedItem(ctx, params.id);
+    try {
+      await plaid.api.itemRemove(decryptToken(item.accessTokenEncrypted, plaid.tokenKey));
+    } catch (error) {
+      // Already removed at Plaid, or the token is invalid. Still drop it here.
+      if (!(error instanceof PlaidApiError)) throw error;
+    }
+    await ctx.db.transaction(async (tx) => {
+      // Keep the accounts and their history; they just stop syncing.
+      await tx.update(accounts).set({ connection: "manual", plaidItemId: null }).where(eq(accounts.plaidItemId, item.id));
+      await tx.delete(plaidItems).where(eq(plaidItems.id, item.id));
+    });
+    return { ok: true as const };
   },
 };

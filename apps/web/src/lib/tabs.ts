@@ -9,3 +9,4 @@ export function resolveTab<T extends readonly string[]>(tabs: T, value: string |
 
 export const OVERVIEW_TABS = ["today", "forecast", "ask"] as const;
 export const TAX_TABS = ["estimates", "assumptions", "safe-harbor"] as const;
+export const CREDIT_CARD_TABS = ["overview", "optimize", "cards"] as const;
