@@ -8,7 +8,7 @@
       "env": ["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY", "NEXT_PUBLIC_API_MODE", "NEXT_PUBLIC_API_BASE_URL"],
       "outputs": [".next/**", "!.next/cache/**", "dist/**"]
     },
-    "dev": { "cache": false, "persistent": true },
+    "dev": { "cache": false, "persistent": true, "passThroughEnv": ["DATABASE_URL"] },
     "typecheck": { "dependsOn": ["^typecheck"] },
     "test": { "outputs": [] }
   }
