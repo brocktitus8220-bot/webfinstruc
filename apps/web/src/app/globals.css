@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-background text-foreground font-sans text-sm;
+    font-feature-settings: "cv11", "ss01";
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  ::selection {
+    @apply bg-primary/20;
+  }
+}

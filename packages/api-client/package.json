@@ -1,0 +1,23 @@
+{
+  "name": "@repo/api-client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./mock": "./src/mock/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@repo/core": "workspace:*",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  }
+}
