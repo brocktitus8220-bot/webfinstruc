@@ -2,7 +2,7 @@ import { z } from "zod";
 import { Cents, Id, IsoDate } from "./common";
 import { WorkspaceKind } from "./workspace";
 
-export const TransactionSource = z.enum(["plaid", "manual", "other"]);
+export const TransactionSource = z.enum(["plaid", "manual", "csv", "other"]);
 export type TransactionSource = z.infer<typeof TransactionSource>;
 
 export const TransactionKind = z.enum(["income", "expense", "transfer"]);

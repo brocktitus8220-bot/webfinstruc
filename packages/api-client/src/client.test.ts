@@ -67,6 +67,42 @@ describe("api client", () => {
     const { client } = makeClient();
     const txs = await client.listTransactions();
     expect(txs.length).toBeGreaterThan(50);
-    txs.forEach((t) => expect(["plaid", "manual", "other"]).toContain(t.source));
+    txs.forEach((t) => expect(["plaid", "manual", "csv", "other"]).toContain(t.source));
+  });
+
+  it("lists sample credit cards with negative balances and profiles", async () => {
+    const cards = await makeClient("personal").client.listCreditCards();
+    expect(cards.map((c) => c.name).sort()).toEqual(["Apple Card", "Travel Rewards Card"]);
+    expect(cards.every((c) => c.balanceCents < 0 && c.profile.creditLimitCents)).toBe(true);
+  });
+
+  it("imports statement rows once and creates the card", async () => {
+    const { client } = makeClient();
+    const rows = [
+      { date: "2026-10-02", amountCents: -650, kind: "expense" as const, description: "Coffee", counterparty: "Cafe", category: "Dining", externalId: "apple:a:1" },
+      { date: "2026-10-10", amountCents: 50_000, kind: "transfer" as const, description: "Payment", counterparty: null, category: "Card payment", externalId: "apple:b:1" },
+    ];
+    const first = await client.importStatement({ body: { format: "apple_card", newAccount: { workspaceKind: "personal", name: "My Apple Card", mask: "1234" }, rows } });
+    expect(first).toMatchObject({ inserted: 2, skipped: 0 });
+    const again = await client.importStatement({ body: { format: "apple_card", accountId: first.accountId, rows } });
+    expect(again).toMatchObject({ inserted: 0, skipped: 2 });
+    const card = (await client.listCreditCards()).find((c) => c.accountId === first.accountId)!;
+    expect(card.connection).toBe("csv");
+    expect(card.balanceCents).toBe(49_350);
+    expect(card.profile.preset).toBe("apple_card");
+  });
+
+  it("saves a card profile and the amount owed", async () => {
+    const { client } = makeClient();
+    const [card] = await client.listCreditCards();
+    const saved = await client.saveCreditCard({ params: { accountId: card!.accountId }, body: { ...card!.profile, annualFeeCents: 0, owedCents: 12_345 } });
+    expect(saved.balanceCents).toBe(-12_345);
+    expect(saved.profile.annualFeeCents).toBe(0);
+  });
+
+  it("reports Plaid as unavailable in sample mode", async () => {
+    const { client } = makeClient();
+    expect(await client.getPlaidStatus()).toEqual({ enabled: false, environment: null });
+    await expect(client.createPlaidLinkToken({ body: { workspaceKind: "personal" } })).rejects.toThrow(/Plaid/);
   });
 });

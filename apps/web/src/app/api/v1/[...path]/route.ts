@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { dispatch, ensureUser } from "@repo/api-server";
 import { getDb } from "@/server/db";
 import { getIdentity, getUserId } from "@/server/identity";
+import { getPlaid } from "@/server/plaid";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,7 +37,7 @@ async function handle(req: NextRequest, { params }: { params: Promise<{ path: st
   const { path } = await params;
   const res = await dispatch(
     { method: req.method, path: `/${path.map(encodeURIComponent).join("/")}`, searchParams: req.nextUrl.searchParams, headers: req.headers, body },
-    { db, userId },
+    { db, userId, plaid: getPlaid() },
   );
   return NextResponse.json(res.body, { status: res.status, headers: { "cache-control": "no-store" } });
 }

@@ -51,3 +51,4 @@ export const useTaxSettings = () => useApiQuery(["tax-settings"], (api) => api.g
 export const useOnboarding = () => useApiQuery(["onboarding"], (api) => api.getOnboarding());
 export const useInvoices = () => useApiQuery(["invoices"], (api) => api.listInvoices());
 export const useMe = () => useApiQuery(["me"], (api) => api.getMe());
+export const useCreditCards = () => useApiQuery(["credit-cards"], (api) => api.listCreditCards());

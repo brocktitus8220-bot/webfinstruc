@@ -3,6 +3,16 @@ import {
   Account,
   AllocationRules,
   BalancePoint,
+  BankConnection,
+  CreateLinkTokenInput,
+  CreditCard,
+  ExchangePublicTokenInput,
+  ImportStatementInput,
+  ImportStatementResult,
+  LinkToken,
+  PlaidStatus,
+  SaveCreditCardInput,
+  SyncResult,
   CreateInvoiceInput,
   CreateTransactionInput,
   Holding,
@@ -124,6 +134,44 @@ export const contract = {
   }),
 
   getTaxSettings: define({ method: "GET", path: "/tax-settings", response: TaxSettings }),
+
+  listCreditCards: define({ method: "GET", path: "/credit-cards", response: z.array(CreditCard) }),
+  saveCreditCard: define({
+    method: "PUT",
+    path: "/credit-cards/:accountId",
+    params: z.object({ accountId: Id }),
+    body: SaveCreditCardInput,
+    response: CreditCard,
+  }),
+  /** Statement files are parsed in the browser; only normalized rows are sent. */
+  importStatement: define({
+    method: "POST",
+    path: "/imports/statement",
+    body: ImportStatementInput,
+    response: ImportStatementResult,
+  }),
+
+  getPlaidStatus: define({ method: "GET", path: "/plaid/status", response: PlaidStatus }),
+  createPlaidLinkToken: define({ method: "POST", path: "/plaid/link-token", body: CreateLinkTokenInput, response: LinkToken }),
+  exchangePlaidPublicToken: define({
+    method: "POST",
+    path: "/plaid/exchange",
+    body: ExchangePublicTokenInput,
+    response: BankConnection,
+  }),
+  listConnections: define({ method: "GET", path: "/connections", response: z.array(BankConnection) }),
+  syncConnection: define({
+    method: "POST",
+    path: "/connections/:id/sync",
+    params: z.object({ id: Id }),
+    response: SyncResult,
+  }),
+  removeConnection: define({
+    method: "DELETE",
+    path: "/connections/:id",
+    params: z.object({ id: Id }),
+    response: z.object({ ok: z.literal(true) }),
+  }),
 } as const satisfies Record<string, EndpointDef>;
 
 export type Contract = typeof contract;

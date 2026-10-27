@@ -8,10 +8,14 @@
  * - Every row belongs to a user, directly or through a workspace.
  */
 import {
+  AccountConnection,
   AccountType,
   AllocationBucket,
+  ConnectionStatus,
   FilingStatus,
   InvoiceStatus,
+  RewardCategory,
+  RewardType,
   SafeHarborMethod,
   TransactionKind,
   TransactionSource,
@@ -47,6 +51,10 @@ export const allocationBucketEnum = pgEnum("allocation_bucket", AllocationBucket
 export const filingStatusEnum = pgEnum("filing_status", FilingStatus.options);
 export const usStateEnum = pgEnum("us_state", US_STATES);
 export const safeHarborMethodEnum = pgEnum("safe_harbor_method", SafeHarborMethod.options);
+export const accountConnectionEnum = pgEnum("account_connection", AccountConnection.options);
+export const connectionStatusEnum = pgEnum("connection_status", ConnectionStatus.options);
+export const rewardTypeEnum = pgEnum("reward_type", RewardType.options);
+export const rewardCategoryEnum = pgEnum("reward_category", RewardCategory.options);
 export const accountsModeEnum = pgEnum("accounts_mode", ["sample", "plaid", "skip"]);
 
 /** One row per signed-in person. The id is the auth provider's user id. */
@@ -71,6 +79,29 @@ export const workspaces = pgTable(
   (t) => [uniqueIndex("workspaces_user_kind_idx").on(t.userId, t.kind)],
 );
 
+/**
+ * One bank login through Plaid (a Plaid "Item"). The access token is
+ * encrypted with PLAID_TOKEN_KEY before it is stored and never leaves the server.
+ */
+export const plaidItems = pgTable(
+  "plaid_items",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    plaidItemId: text("plaid_item_id").notNull(),
+    accessTokenEncrypted: text("access_token_encrypted").notNull(),
+    institutionName: text("institution_name").notNull(),
+    status: connectionStatusEnum("status").notNull().default("active"),
+    errorCode: text("error_code"),
+    /** transactions/sync cursor. Null until the first sync. */
+    cursor: text("cursor"),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("plaid_items_plaid_item_idx").on(t.plaidItemId), index("plaid_items_user_idx").on(t.userId)],
+);
+
 export const accounts = pgTable(
   "accounts",
   {
@@ -79,14 +110,21 @@ export const accounts = pgTable(
     name: text("name").notNull(),
     institution: text("institution").notNull(),
     type: accountTypeEnum("type").notNull(),
+    connection: accountConnectionEnum("connection").notNull().default("manual"),
+    /** Set while the account is linked through Plaid. Disconnecting keeps the account and its history. */
+    plaidItemId: text("plaid_item_id").references(() => plaidItems.id, { onDelete: "set null" }),
+    plaidAccountId: text("plaid_account_id"),
     mask: text("mask").notNull(),
-    /** Current balance for cash and credit accounts. Investment balances come from holdings. */
+    /**
+     * Current balance for cash and credit accounts, signed: negative is owed.
+     * Investment balances come from holdings.
+     */
     balanceCents: cents("balance_cents").notNull().default(0),
     currency: text("currency").notNull().default("USD"),
     custodian: text("custodian"),
     createdAt: createdAt(),
   },
-  (t) => [index("accounts_workspace_idx").on(t.workspaceId)],
+  (t) => [index("accounts_workspace_idx").on(t.workspaceId), uniqueIndex("accounts_plaid_account_idx").on(t.plaidAccountId)],
 );
 
 export const transactions = pgTable(
@@ -105,11 +143,14 @@ export const transactions = pgTable(
     source: transactionSourceEnum("source").notNull(),
     pending: boolean("pending").notNull().default(false),
     notes: text("notes"),
+    /** Id from the source (Plaid transaction_id, or a statement row key). Used to skip duplicates. */
+    externalId: text("external_id"),
     createdAt: createdAt(),
   },
   (t) => [
     index("transactions_workspace_date_idx").on(t.workspaceId, t.date),
     index("transactions_account_date_idx").on(t.accountId, t.date),
+    uniqueIndex("transactions_account_external_idx").on(t.accountId, t.externalId),
   ],
 );
 
@@ -180,3 +221,30 @@ export const taxSettings = pgTable("tax_settings", {
   priorYearAgiCents: cents("prior_year_agi_cents").notNull(),
   safeHarborMethod: safeHarborMethodEnum("safe_harbor_method").notNull(),
 });
+
+/** Rewards and terms for a credit card account. Missing row means the default profile. */
+export const creditCardProfiles = pgTable("credit_card_profiles", {
+  accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
+  preset: text("preset"),
+  creditLimitCents: cents("credit_limit_cents"),
+  aprBasisPoints: integer("apr_basis_points"),
+  annualFeeCents: cents("annual_fee_cents").notNull().default(0),
+  statementDay: integer("statement_day"),
+  dueDay: integer("due_day"),
+  rewardType: rewardTypeEnum("reward_type").notNull(),
+  /** Value of one point or mile in hundredths of a cent. Cash back is 100. */
+  pointValueHundredthsOfCent: integer("point_value_hundredths_of_cent").notNull(),
+  baseRateBasisPoints: integer("base_rate_basis_points").notNull(),
+});
+
+/** Bonus earn rates per category. 300 basis points is 3% or 3x. */
+export const creditCardRewardRates = pgTable(
+  "credit_card_reward_rates",
+  {
+    accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+    category: rewardCategoryEnum("category").notNull(),
+    rateBasisPoints: integer("rate_basis_points").notNull(),
+    annualCapCents: cents("annual_cap_cents"),
+  },
+  (t) => [primaryKey({ columns: [t.accountId, t.category] })],
+);

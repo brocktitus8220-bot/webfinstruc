@@ -9,3 +9,5 @@ export * from "./tax";
 export * from "./investment";
 export * from "./onboarding";
 export * from "./reports";
+export * from "./credit-card";
+export * from "./plaid";

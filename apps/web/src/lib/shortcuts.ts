@@ -49,6 +49,7 @@ export const SHORTCUT_GROUPS = [
       { keys: ["g", "o"], label: "Overview" },
       { keys: ["g", "i"], label: "Income" },
       { keys: ["g", "e"], label: "Expenses" },
+      { keys: ["g", "c"], label: "Credit cards" },
       { keys: ["g", "v"], label: "Investments" },
       { keys: ["g", "t"], label: "Tax projection" },
     ],

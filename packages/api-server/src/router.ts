@@ -4,6 +4,7 @@ import { contract, type EndpointDef, type EndpointName, type HttpMethod, WORKSPA
 import type { Database } from "@repo/db";
 import { HttpError } from "./errors";
 import { type HandlerContext, handlers } from "./handlers";
+import type { PlaidService } from "./plaid";
 
 export interface ApiHttpRequest {
   method: string;
@@ -64,6 +65,7 @@ export interface DispatchOptions {
   db: Database;
   userId: string;
   now?: Date;
+  plaid?: PlaidService | null;
 }
 
 /**
@@ -71,7 +73,7 @@ export interface DispatchOptions {
  * query, and body with the same Zod schemas the client uses, call the
  * handler, and validate the response before it leaves the server.
  */
-export async function dispatch(req: ApiHttpRequest, { db, userId, now = new Date() }: DispatchOptions): Promise<ApiHttpResponse> {
+export async function dispatch(req: ApiHttpRequest, { db, userId, now = new Date(), plaid = null }: DispatchOptions): Promise<ApiHttpResponse> {
   try {
     const { route, params } = match(req.method, req.path);
     const { def } = route;
@@ -81,7 +83,7 @@ export async function dispatch(req: ApiHttpRequest, { db, userId, now = new Date
       query: def.query ? def.query.parse(searchParamsToObject(req.searchParams)) : undefined,
       body: def.body ? def.body.parse(req.body) : undefined,
     };
-    const ctx: HandlerContext = { db, userId, workspace, now };
+    const ctx: HandlerContext = { db, userId, workspace, now, plaid };
     const handler = handlers[route.name] as (r: typeof parsed, c: HandlerContext) => Promise<unknown>;
     const result = await handler(parsed, ctx);
     return { status: def.method === "POST" ? 201 : 200, body: def.response.parse(result) };

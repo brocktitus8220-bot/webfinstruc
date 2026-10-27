@@ -1,9 +1,13 @@
 import {
   type Account,
   type AllocationRules,
+  type CreditCard,
+  type CreditCardProfile,
   DEFAULT_ALLOCATION_RULES,
+  DEFAULT_CREDIT_CARD_PROFILE,
   type Invoice,
   isCashAccount,
+  isInvestmentAccount,
   type OnboardingState,
   type TaxSettings,
   type Transaction,
@@ -13,7 +17,7 @@ import type { EndpointName } from "../contract";
 import { ApiError } from "../errors";
 import type { ApiRequest, EndpointResponse, ParsedRequest, Transport } from "../types";
 import { addDays, monthStart, startOfUtcDay, toIsoDate, toIsoMonth } from "./dates";
-import { buildMockTransactions, MOCK_ACCOUNTS, MOCK_HOLDINGS, MOCK_INVOICES, MOCK_TAX_PROFILE, MOCK_USER, MOCK_WORKSPACES } from "./fixtures";
+import { buildMockTransactions, MOCK_ACCOUNTS, MOCK_CARD_PROFILES, MOCK_HOLDINGS, MOCK_INVOICES, MOCK_TAX_PROFILE, MOCK_USER, MOCK_WORKSPACES } from "./fixtures";
 
 /** Matches the subset of the Web Storage API the mock needs. */
 export interface MockStorage {
@@ -37,6 +41,14 @@ interface MutableState {
   allocationRules: AllocationRules;
   createdTransactions: Transaction[];
   invoices: Invoice[];
+  /** Card profiles the user edited, by account id. */
+  cardProfiles: Record<string, CreditCardProfile>;
+  /** Accounts created by statement imports. */
+  importedAccounts: Account[];
+  /** Statement row keys already imported, by account id, so re-imports skip them. */
+  importedKeys: Record<string, string[]>;
+  /** Balance corrections the user typed in, by account id. */
+  balanceAdjustments: Record<string, number>;
 }
 
 const initialState = (): MutableState => ({
@@ -44,7 +56,15 @@ const initialState = (): MutableState => ({
   allocationRules: DEFAULT_ALLOCATION_RULES,
   createdTransactions: [],
   invoices: MOCK_INVOICES.map((i) => ({ ...i })),
+  cardProfiles: {},
+  importedAccounts: [],
+  importedKeys: {},
+  balanceAdjustments: {},
 });
+
+const plaidUnavailable = (endpoint: string): never => {
+  throw new ApiError("Bank connections need the real API with Plaid keys. Sample mode cannot connect banks.", 503, endpoint);
+};
 
 type Handlers = {
   [N in EndpointName]: (req: ParsedRequest<N> & { workspace: WorkspaceScope }) => EndpointResponse<N> | Promise<EndpointResponse<N>>;
@@ -79,15 +99,31 @@ export function createMockTransport(options: MockTransportOptions = {}): Transpo
     return [...state.createdTransactions, ...generated.transactions];
   };
 
-  const accountsFor = (scope: WorkspaceScope) => MOCK_ACCOUNTS.filter((a) => inScope(scope, a.workspaceKind));
+  const allAccounts = () => [...MOCK_ACCOUNTS, ...state.importedAccounts];
+  const accountsFor = (scope: WorkspaceScope) => allAccounts().filter((a) => inScope(scope, a.workspaceKind));
 
   const accountWithBalance = (a: Account): Account => {
-    if (isCashAccount(a)) {
+    if (!isInvestmentAccount(a)) {
       const created = state.createdTransactions.filter((t) => t.accountId === a.id).reduce((s, t) => s + t.amountCents, 0);
-      return { ...a, balanceCents: a.balanceCents + created };
+      return { ...a, balanceCents: a.balanceCents + created + (state.balanceAdjustments[a.id] ?? 0) };
     }
     const value = MOCK_HOLDINGS.filter((h) => h.accountId === a.id).reduce((s, h) => s + h.marketValueCents, 0);
     return { ...a, balanceCents: value };
+  };
+
+  const toCreditCard = (a: Account): CreditCard => {
+    const withBalance = accountWithBalance(a);
+    return {
+      accountId: a.id,
+      workspaceId: a.workspaceId,
+      workspaceKind: a.workspaceKind,
+      name: a.name,
+      institution: a.institution,
+      mask: a.mask,
+      connection: a.connection,
+      balanceCents: withBalance.balanceCents,
+      profile: state.cardProfiles[a.id] ?? MOCK_CARD_PROFILES[a.id] ?? DEFAULT_CREDIT_CARD_PROFILE,
+    };
   };
 
   const selectedCashAccounts = (scope: WorkspaceScope, ids: string[] | undefined) =>
@@ -116,7 +152,7 @@ export function createMockTransport(options: MockTransportOptions = {}): Transpo
       return tx && inScope(workspace, tx.workspaceKind) ? tx : notFound("getTransaction", "Transaction");
     },
     createTransaction: ({ body }) => {
-      const account = MOCK_ACCOUNTS.find((a) => a.id === body.accountId) ?? notFound("createTransaction", "Account");
+      const account = allAccounts().find((a) => a.id === body.accountId) ?? notFound("createTransaction", "Account");
       const tx: Transaction = {
         id: `tx_m${Date.now().toString(36)}${state.createdTransactions.length}`,
         workspaceId: account.workspaceId,
@@ -192,7 +228,7 @@ export function createMockTransport(options: MockTransportOptions = {}): Transpo
     },
     getHolding: ({ params, workspace }) => {
       const h = MOCK_HOLDINGS.find((x) => x.id === params.id);
-      const account = h && MOCK_ACCOUNTS.find((a) => a.id === h.accountId);
+      const account = h && allAccounts().find((a) => a.id === h.accountId);
       return h && account && inScope(workspace, account.workspaceKind) ? h : notFound("getHolding", "Holding");
     },
 
@@ -217,6 +253,73 @@ export function createMockTransport(options: MockTransportOptions = {}): Transpo
       state: state.onboarding.state ?? "CA",
       ...MOCK_TAX_PROFILE,
     }),
+
+    listCreditCards: ({ workspace }) => accountsFor(workspace).filter((a) => a.type === "credit").map(toCreditCard),
+    saveCreditCard: ({ params, body }) => {
+      const account = allAccounts().find((a) => a.id === params.accountId && a.type === "credit") ?? notFound("saveCreditCard", "Credit card");
+      const { owedCents, ...profile } = body;
+      state.cardProfiles[account.id] = profile;
+      if (owedCents !== undefined && account.connection !== "plaid") {
+        const current = accountWithBalance(account).balanceCents;
+        state.balanceAdjustments[account.id] = (state.balanceAdjustments[account.id] ?? 0) + (-owedCents - current);
+      }
+      persist();
+      return toCreditCard(account);
+    },
+    importStatement: ({ body }) => {
+      let account: Account;
+      if (body.newAccount) {
+        const kind = body.newAccount.workspaceKind;
+        account = {
+          id: `acc_m${Date.now().toString(36)}${state.importedAccounts.length}`,
+          workspaceId: kind === "business" ? "ws_business" : "ws_personal",
+          workspaceKind: kind,
+          name: body.newAccount.name,
+          institution: body.format === "apple_card" ? "Apple" : "Imported",
+          type: "credit",
+          connection: "csv",
+          mask: body.newAccount.mask,
+          balanceCents: 0,
+          currency: "USD",
+          custodian: null,
+        };
+        state.importedAccounts = [...state.importedAccounts, account];
+        if (body.format === "apple_card") {
+          state.cardProfiles[account.id] = { ...DEFAULT_CREDIT_CARD_PROFILE, ...MOCK_CARD_PROFILES.acc_apple_card!, creditLimitCents: null, statementDay: null, dueDay: null, aprBasisPoints: null };
+        }
+      } else {
+        account = allAccounts().find((a) => a.id === body.accountId && a.type === "credit") ?? notFound("importStatement", "Credit card");
+      }
+      const seen = new Set(state.importedKeys[account.id] ?? []);
+      const fresh = body.rows.filter((r) => !seen.has(r.externalId));
+      const stamp = Date.now().toString(36);
+      const created: Transaction[] = fresh.map((r, i) => ({
+        id: `tx_i${stamp}${i}`,
+        workspaceId: account.workspaceId,
+        workspaceKind: account.workspaceKind,
+        accountId: account.id,
+        date: r.date,
+        amountCents: r.amountCents,
+        kind: r.kind,
+        description: r.description,
+        counterparty: r.counterparty,
+        category: r.category,
+        source: "csv",
+        pending: false,
+        notes: null,
+      }));
+      state.createdTransactions = [...created, ...state.createdTransactions];
+      state.importedKeys[account.id] = [...seen, ...fresh.map((r) => r.externalId)];
+      persist();
+      return { accountId: account.id, inserted: fresh.length, skipped: body.rows.length - fresh.length };
+    },
+
+    getPlaidStatus: () => ({ enabled: false, environment: null }),
+    createPlaidLinkToken: () => plaidUnavailable("createPlaidLinkToken"),
+    exchangePlaidPublicToken: () => plaidUnavailable("exchangePlaidPublicToken"),
+    listConnections: () => [],
+    syncConnection: () => plaidUnavailable("syncConnection"),
+    removeConnection: () => plaidUnavailable("removeConnection"),
   };
 
   return async (request: ApiRequest) => {

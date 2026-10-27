@@ -17,6 +17,8 @@ import { fieldErrors } from "@/lib/forms";
 import { useOnboarding } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { AllocationEditor } from "../allocation/allocation-editor";
+import { ConnectBankButton } from "../connections/connect-bank-button";
+import { plaidDisabledReason, usePlaidStatus } from "../connections/use-plaid-connect";
 
 type Patch = Partial<OnboardingState>;
 
@@ -135,16 +137,28 @@ function FilingStep({ state }: { state: OnboardingState }) {
 
 function AccountsStep({ state }: { state: OnboardingState }) {
   const { next, saving } = useStepSave(3);
+  const status = usePlaidStatus();
+  const reason = status.isLoading ? null : plaidDisabledReason(status.data?.enabled);
+  const [connected, setConnected] = React.useState<string[]>([]);
   return (
     <StepFrame title="Connect your accounts" description="Link the accounts your income lands in, or explore with sample data first.">
       <div className="space-y-2">
-        <div className="flex items-center gap-3 rounded-lg border bg-surface p-4 opacity-70">
-          <Landmark className="size-5 text-muted-foreground" />
-          <div className="flex-1">
-            <div className="text-sm font-medium">Connect a bank</div>
-            <div className="text-xs text-muted-foreground">Secure bank connections are coming soon.</div>
+        <div className={cn("flex flex-wrap items-center gap-3 rounded-lg border bg-surface p-4", (state.accountsMode === "plaid" || connected.length > 0) && "border-primary ring-1 ring-primary/30")}>
+          <Landmark className={cn("size-5", reason ? "text-muted-foreground" : "text-primary")} />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium">Connect a bank or card</div>
+            <div className="text-xs text-muted-foreground">
+              {connected.length > 0
+                ? `Connected ${connected.join(", ")}. Add another, or continue.`
+                : (reason ?? "Secure, read-only connection through Plaid. We never see your bank password.")}
+            </div>
           </div>
-          <Button variant="outline" disabled aria-disabled title="Not available yet">Connect with Plaid</Button>
+          <ConnectBankButton
+            variant="outline"
+            label={connected.length > 0 ? "Add another" : "Connect with Plaid"}
+            onConnected={(c) => setConnected((list) => [...list, c.institutionName])}
+          />
+          {connected.length > 0 && <Button onClick={() => next({ accountsMode: "plaid" })} disabled={saving}>Continue</Button>}
         </div>
         <div className={cn("flex items-center gap-3 rounded-lg border bg-surface p-4", state.accountsMode === "sample" && "border-primary ring-1 ring-primary/30")}>
           <Database className="size-5 text-primary" />
@@ -184,7 +198,7 @@ function FinishStep({ state }: { state: OnboardingState }) {
   const summary: [string, string][] = [
     ["Work", USER_TYPES.find((t) => t.value === state.userType)?.label ?? "Not set"],
     ["Filing", state.filingStatus ? `${FILING_STATUS_LABELS[state.filingStatus]}, ${state.state ?? ""}` : "Not set"],
-    ["Accounts", state.accountsMode === "sample" ? "Sample data" : state.accountsMode === "skip" ? "Skipped for now" : "Not set"],
+    ["Accounts", state.accountsMode === "sample" ? "Sample data" : state.accountsMode === "plaid" ? "Connected through Plaid" : state.accountsMode === "skip" ? "Skipped for now" : "Not set"],
     ["Allocation", rules.map((r) => `${ALLOCATION_BUCKET_LABELS[r.bucket]} ${r.percent}%`).join(", ")],
   ];
   return (

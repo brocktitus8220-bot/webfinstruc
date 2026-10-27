@@ -1,7 +1,7 @@
 import {
-
   Building2,
   Calculator,
+  CreditCard,
   LayoutDashboard,
   type LucideIcon,
   Receipt,
@@ -22,6 +22,7 @@ export const APP_NAV: NavItem[] = [
   { label: "Overview", href: "/app/overview", icon: LayoutDashboard, shortcut: "o" },
   { label: "Income", href: "/app/income", icon: Wallet, shortcut: "i" },
   { label: "Expenses", href: "/app/expenses", icon: Receipt, shortcut: "e" },
+  { label: "Credit Cards", href: "/app/credit-cards", icon: CreditCard, shortcut: "c" },
   { label: "Investments", href: "/app/investments", icon: TrendingUp, shortcut: "v" },
   { label: "Custodian Investments", href: "/app/custodian-investments", icon: Building2 },
   { label: "Tax Projection", href: "/app/tax-projection", icon: Calculator, shortcut: "t" },
